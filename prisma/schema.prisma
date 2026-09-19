@@ -1,0 +1,198 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  ADMIN
+  MEMBER
+}
+
+enum Tone {
+  WARM_PERSONAL
+  PROFESSIONAL
+  SHORT_DIRECT
+}
+
+enum ReviewStatus {
+  QUEUED
+  PROCESSING
+  PENDING_APPROVAL
+  APPROVING
+  AUTO_SENT
+  APPROVED
+  FAILED
+  DELETED
+}
+
+enum PostTopicType {
+  STANDARD
+  OFFER
+  EVENT
+}
+
+enum PostStatus {
+  SCHEDULED
+  PUBLISHING
+  ACTIVE
+  PAUSED
+  FAILED
+}
+
+enum AccountStatus {
+  CONNECTED
+  REAUTH_REQUIRED
+  DISCONNECTED
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+model Agency {
+  id        String    @id @default(cuid())
+  name      String
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  users     User[]
+  accounts  Account[]
+}
+
+model User {
+  id            String   @id @default(cuid())
+  agencyId      String
+  googleSubject String?  @unique
+  email         String   @unique
+  displayName   String
+  role          UserRole @default(MEMBER)
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  agency        Agency   @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+
+  @@index([agencyId, isActive])
+}
+
+model Account {
+  id                    String        @id @default(cuid())
+  agencyId              String
+  googleAccountId       String        @unique
+  googleEmail           String
+  encryptedRefreshToken String?
+  encryptedAccessToken  String?
+  tokenExpiresAt        DateTime?
+  status                AccountStatus @default(CONNECTED)
+  lastReviewSyncAt      DateTime?
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+  agency                Agency        @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  locations             Location[]
+
+  @@index([agencyId, status])
+  @@index([status, lastReviewSyncAt])
+}
+
+model Location {
+  id                  String            @id @default(cuid())
+  accountId           String
+  googleLocationId    String            @unique
+  displayName         String
+  businessCategory    String
+  defaultTone         Tone              @default(WARM_PERSONAL)
+  autoReplyEnabled    Boolean           @default(true)
+  whatsappAlertNumber String?
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+  account             Account           @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  reviews             Review[]
+  posts               LocalPost[]
+  notifications       NotificationLog[]
+
+  @@index([accountId])
+}
+
+model Review {
+  id                  String            @id @default(cuid())
+  locationId          String
+  googleReviewId      String            @unique
+  reviewerName        String
+  starRating          Int
+  comment             String
+  aiDraftReply        String?
+  publishedReply      String?
+  googleCreatedAt     DateTime
+  googleUpdatedAt     DateTime
+  queuedAt            DateTime?
+  processingStartedAt DateTime?
+  processedAt         DateTime?
+  failureCode         String?
+  failureMessage      String?
+  status              ReviewStatus      @default(QUEUED)
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+  location            Location          @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  notifications       NotificationLog[]
+
+  @@index([locationId, status])
+  @@index([status, queuedAt])
+  @@index([locationId, googleUpdatedAt])
+}
+
+model LocalPost {
+  id                String        @id @default(cuid())
+  locationId        String
+  googlePostId      String?       @unique
+  topicType         PostTopicType
+  summaryText       String
+  structuredPayload Json?
+  isRecurring       Boolean       @default(false)
+  frequencyDays     Int           @default(6)
+  nextPublishAt     DateTime?
+  lastPublishedAt   DateTime?
+  status            PostStatus    @default(SCHEDULED)
+  failureCode       String?
+  failureMessage    String?
+  publicationKey    String?       @unique
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  location          Location      @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  @@index([locationId, status])
+  @@index([isRecurring, status, nextPublishAt])
+}
+
+model NotificationLog {
+  id             String             @id @default(cuid())
+  locationId     String
+  reviewId       String?
+  destination    String
+  templateName   String
+  payload        Json
+  status         NotificationStatus @default(PENDING)
+  providerId     String?
+  failureMessage String?
+  createdAt      DateTime           @default(now())
+  sentAt         DateTime?
+  location       Location           @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  review         Review?            @relation(fields: [reviewId], references: [id], onDelete: SetNull)
+
+  @@index([locationId, createdAt])
+  @@index([reviewId])
+}
+
+model ProviderEvent {
+  id         String   @id @default(cuid())
+  provider   String
+  action     String
+  resourceId String?
+  payload    Json
+  createdAt  DateTime @default(now())
+
+  @@index([provider, action, createdAt])
+}

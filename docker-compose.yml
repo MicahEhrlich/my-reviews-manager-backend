@@ -1,0 +1,80 @@
+x-app-environment: &app-environment
+  NODE_ENV: development
+  DATABASE_URL: postgresql://revu:revu@postgres:5432/revu?schema=public
+  REDIS_URL: redis://redis:6379
+  FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:5173}
+  FRONTEND_URL: ${FRONTEND_URL:-http://localhost:5173/#}
+  AUTH_MODE: ${AUTH_MODE:-dev}
+  PROVIDER_MODE: ${PROVIDER_MODE:-mock}
+  DEV_USER_EMAIL: ${DEV_USER_EMAIL:-admin@revu.local}
+  COOKIE_SECRET: ${COOKIE_SECRET:-local-cookie-secret-change-me-32-chars}
+  TOKEN_ENCRYPTION_KEYS: ${TOKEN_ENCRYPTION_KEYS:-v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=}
+  GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+  GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+  GOOGLE_OIDC_REDIRECT_URI: ${GOOGLE_OIDC_REDIRECT_URI:-http://localhost:3001/auth/google/callback}
+  GOOGLE_BUSINESS_REDIRECT_URI: ${GOOGLE_BUSINESS_REDIRECT_URI:-http://localhost:3001/api/v1/google-business/callback}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-4-6}
+  META_WHATSAPP_ACCESS_TOKEN: ${META_WHATSAPP_ACCESS_TOKEN:-}
+  META_WHATSAPP_PHONE_NUMBER_ID: ${META_WHATSAPP_PHONE_NUMBER_ID:-}
+  META_WHATSAPP_TEMPLATE_NAME: ${META_WHATSAPP_TEMPLATE_NAME:-revu_pending_review}
+  META_WHATSAPP_TEMPLATE_LANGUAGE: ${META_WHATSAPP_TEMPLATE_LANGUAGE:-he}
+  META_GRAPH_API_VERSION: ${META_GRAPH_API_VERSION:-v23.0}
+  MOCK_FAILURE_MODE: ${MOCK_FAILURE_MODE:-none}
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: revu
+      POSTGRES_USER: revu
+      POSTGRES_PASSWORD: revu
+    ports: ["5432:5432"]
+    volumes: ["postgres_data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U revu -d revu"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports: ["6379:6379"]
+    volumes: ["redis_data:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  migrate:
+    build: { context: ., target: development }
+    environment: *app-environment
+    command: ["sh", "-c", "npm run db:deploy && npm run db:seed"]
+    depends_on:
+      postgres: { condition: service_healthy }
+  api:
+    build: { context: ., target: development }
+    environment: *app-environment
+    command: ["npm", "run", "dev:api"]
+    ports: ["3001:3001"]
+    volumes: ["./src:/app/src", "./prisma:/app/prisma"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3001/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+  worker:
+    build: { context: ., target: development }
+    environment: *app-environment
+    command: ["npm", "run", "dev:worker"]
+    volumes: ["./src:/app/src", "./prisma:/app/prisma"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+
+volumes:
+  postgres_data:
+  redis_data:
