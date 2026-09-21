@@ -11,6 +11,7 @@ const schema = z.object({
   FRONTEND_URL: z.string().default('http://localhost:5173/#'),
   AUTH_MODE: z.enum(['dev', 'google']).default('dev'),
   PROVIDER_MODE: z.enum(['mock', 'live']).default('mock'),
+  REPLY_PROVIDER_MODE: z.preprocess((value) => value === '' ? undefined : value, z.enum(['mock', 'anthropic']).optional()),
   DEV_USER_EMAIL: z.string().email().default('admin@revu.local'),
   COOKIE_SECRET: z.string().min(32).default('local-cookie-secret-change-me-32-chars'),
   TOKEN_ENCRYPTION_KEYS: z.string().default('v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='),
@@ -28,10 +29,15 @@ const schema = z.object({
   MOCK_FAILURE_MODE: z.enum(['none', 'transient', 'permanent']).default('none'),
 });
 
-export type Config = z.infer<typeof schema>;
+type ParsedConfig = z.infer<typeof schema>;
+export type Config = Omit<ParsedConfig, 'REPLY_PROVIDER_MODE'> & { REPLY_PROVIDER_MODE: 'mock' | 'anthropic' };
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
-  const config = schema.parse(env);
+  const parsed = schema.parse(env);
+  const config: Config = {
+    ...parsed,
+    REPLY_PROVIDER_MODE: parsed.REPLY_PROVIDER_MODE ?? (parsed.PROVIDER_MODE === 'live' ? 'anthropic' : 'mock'),
+  };
   if (config.NODE_ENV === 'production' && config.AUTH_MODE === 'dev') {
     throw new Error('AUTH_MODE=dev is forbidden in production');
   }
@@ -42,11 +48,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     const missing = [
       ['GOOGLE_CLIENT_ID', config.GOOGLE_CLIENT_ID],
       ['GOOGLE_CLIENT_SECRET', config.GOOGLE_CLIENT_SECRET],
-      ['ANTHROPIC_API_KEY', config.ANTHROPIC_API_KEY],
       ['META_WHATSAPP_ACCESS_TOKEN', config.META_WHATSAPP_ACCESS_TOKEN],
       ['META_WHATSAPP_PHONE_NUMBER_ID', config.META_WHATSAPP_PHONE_NUMBER_ID],
     ].filter(([, value]) => !value).map(([name]) => name);
     if (missing.length) throw new Error(`Live providers require: ${missing.join(', ')}`);
+  }
+  if (config.REPLY_PROVIDER_MODE === 'anthropic' && !config.ANTHROPIC_API_KEY) {
+    throw new Error('Anthropic reply provider requires: ANTHROPIC_API_KEY');
   }
   return config;
 }

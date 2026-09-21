@@ -38,7 +38,7 @@ export class MockReplyGenerator implements ReviewReplyGenerator {
   async generate(input: ReplyInput) {
     maybeFail(this.config.MOCK_FAILURE_MODE);
     const ending = input.rating >= 4 ? 'שמחנו לשמוע שנהנית ונשמח לראותך שוב.' : 'אנו מצטערים שזו הייתה החוויה ונשמח לבדוק את הנושא ישירות מולך.';
-    return `${intros[input.tone]}, ${input.reviewerName}. ${ending}`;
+    return `${intros[input.tone]}. ${ending}`;
   }
 }
 

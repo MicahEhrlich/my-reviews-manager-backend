@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { loadConfig } from '../src/config.js';
 import { MockReplyGenerator } from '../src/providers/mock.js';
 
-const input = { businessName: 'מספרת אלי', businessCategory: 'מספרה', reviewerName: 'נועה', rating: 5, reviewText: 'מעולה', tone: 'WARM_PERSONAL' as const };
+const input = { businessName: 'מספרת אלי', businessCategory: 'מספרה', rating: 5, reviewText: 'מעולה', tone: 'WARM_PERSONAL' as const };
 describe('mock reply provider', () => {
   it('produces deterministic tone-aware Hebrew without network access', async () => {
     const provider = new MockReplyGenerator(loadConfig({ NODE_ENV: 'test', COOKIE_SECRET: '12345678901234567890123456789012' }));

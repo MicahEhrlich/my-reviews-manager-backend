@@ -35,7 +35,7 @@ export function createHandlers(db: PrismaClient, providers: Providers, queues: Q
           await providers.google.replyToReview(review.location.account, review.location, review, review.aiDraftReply);
           await db.review.update({ where: { id: review.id }, data: { publishedReply: review.aiDraftReply, status: 'APPROVED', processedAt: new Date() } }); return;
         }
-        const reply = await providers.replies.generate({ businessName: review.location.displayName, businessCategory: review.location.businessCategory, reviewerName: review.reviewerName, rating: review.starRating, reviewText: review.comment, tone: review.location.defaultTone });
+        const reply = await providers.replies.generate({ businessName: review.location.displayName, businessCategory: review.location.businessCategory, rating: review.starRating, reviewText: review.comment, tone: review.location.defaultTone });
         if (review.starRating >= 4 && review.location.autoReplyEnabled) {
           await providers.google.replyToReview(review.location.account, review.location, review, reply);
           await db.review.update({ where: { id: review.id }, data: { aiDraftReply: reply, publishedReply: reply, status: 'AUTO_SENT', processedAt: new Date() } });

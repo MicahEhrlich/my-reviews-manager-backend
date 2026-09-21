@@ -2,7 +2,7 @@
 
 Independent local backend for the Revu Google Business Profile dashboard. It uses Fastify, Prisma/PostgreSQL, BullMQ/Redis, and provider adapters for Google Business Profile, Anthropic, and Meta WhatsApp.
 
-The default configuration is fully offline: `AUTH_MODE=dev` and `PROVIDER_MODE=mock`. It does not call Google, Anthropic, or Meta and does not contain deployment configuration.
+The default configuration is fully offline: `AUTH_MODE=dev`, `PROVIDER_MODE=mock`, and `REPLY_PROVIDER_MODE=mock`. It does not call Google, Anthropic, or Meta and does not contain deployment configuration.
 
 ## Start locally
 
@@ -38,6 +38,7 @@ npm run db:deploy        # apply checked-in migrations
 npm run db:seed          # repeatable deterministic seed
 npm run db:reset         # destructive local DB reset + seed
 npm run jobs:trigger     # manually queue sync and renewal scans
+npm run reviews:add-negative-samples # create 1–3 star reviews and wait for Anthropic drafts
 npm run typecheck
 npm run lint
 npm test
@@ -45,6 +46,14 @@ npm run build
 ```
 
 For host-based development, copy `.env.example` to `.env` and change the database and Redis hosts from `postgres`/`redis` to `localhost`.
+
+To exercise real Anthropic draft generation without Docker, start `npm run dev:worker` in one terminal and then run:
+
+```bash
+npm run reviews:add-negative-samples
+```
+
+The command requires `PROVIDER_MODE=mock`, `REPLY_PROVIDER_MODE=anthropic`, and `ANTHROPIC_API_KEY`. Restart the worker after changing `.env` and keep only one local worker running, since duplicate workers may consume jobs with stale configuration. The command creates fresh 1-, 2-, and 3-star reviews across the three seeded locations, waits up to 90 seconds for `QUEUED → PROCESSING → PENDING_APPROVAL`, and prints the drafts saved in PostgreSQL. Refresh the reviews page to see them; the sample rows remain until deleted through the UI.
 
 ## Architecture
 
@@ -78,11 +87,21 @@ Review and post lists support `locationId`, `cursor`, and `limit`; reviews also 
 
 ## Live adapters (opt-in)
 
-Set `PROVIDER_MODE=live` only after configuring Google OAuth, Anthropic, and Meta values from `.env.example`. Startup fails fast if required values are absent. `AUTH_MODE=google` independently enables staff OIDC. Development auth is refused when `NODE_ENV=production`.
+`PROVIDER_MODE` controls the Google Business and WhatsApp adapters. `REPLY_PROVIDER_MODE` independently controls reply generation, so local development can keep Google and WhatsApp mocked while calling Anthropic:
 
-Google Business uses the `business.manage` scope and refreshes access tokens through `google-auth-library`. Anthropic defaults to `claude-sonnet-4-6`, constructs a Hebrew-only prompt, limits untrusted review input, and rejects empty output. Meta sends the configured approved template and validates E.164 destinations.
+```dotenv
+PROVIDER_MODE=mock
+REPLY_PROVIDER_MODE=anthropic
+ANTHROPIC_API_KEY=your-backend-only-key
+```
 
-The backend contract is intentionally separate from the frontend. A later frontend HTTP service can consume these DTOs without coupling UI components to Prisma or BullMQ.
+Restart the worker after changing these values because all Anthropic requests run there. Generated drafts are saved to PostgreSQL before the API returns them to the frontend. The API key must never be placed in a frontend or `VITE_` environment variable.
+
+Set `PROVIDER_MODE=live` only after configuring Google OAuth and Meta values from `.env.example`. When `REPLY_PROVIDER_MODE` is omitted, it defaults to `anthropic` for live integrations and `mock` otherwise, preserving the existing live behavior. Startup fails fast if credentials required by either selected mode are absent. `AUTH_MODE=google` independently enables staff OIDC. Development auth is refused when `NODE_ENV=production`.
+
+Google Business uses the `business.manage` scope and refreshes access tokens through `google-auth-library`. Anthropic defaults to `claude-sonnet-4-6`, constructs a Hebrew-only prompt without the reviewer name, limits untrusted review input, and rejects empty output. Reviews below four stars are stored as drafts for explicit approval and are never automatically published. Meta sends the configured approved template and validates E.164 destinations.
+
+The frontend consumes these DTOs through its HTTP service without coupling UI components to Prisma, BullMQ, or Anthropic.
 
 ## Reset and inspection
 

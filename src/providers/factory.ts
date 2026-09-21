@@ -5,6 +5,10 @@ import { MockGoogleProvider, MockReplyGenerator, MockWhatsAppNotifier } from './
 import type { Providers } from './types.js';
 
 export function createProviders(config: Config, db: PrismaClient): Providers {
-  if (config.PROVIDER_MODE === 'mock') return { google: new MockGoogleProvider(db, config), replies: new MockReplyGenerator(config), whatsapp: new MockWhatsAppNotifier(db, config) };
-  return { google: new LiveGoogleProvider(db, config), replies: new AnthropicReplyGenerator(config), whatsapp: new MetaWhatsAppNotifier(config) };
+  const liveIntegrations = config.PROVIDER_MODE === 'live';
+  return {
+    google: liveIntegrations ? new LiveGoogleProvider(db, config) : new MockGoogleProvider(db, config),
+    replies: config.REPLY_PROVIDER_MODE === 'anthropic' ? new AnthropicReplyGenerator(config) : new MockReplyGenerator(config),
+    whatsapp: liveIntegrations ? new MetaWhatsAppNotifier(config) : new MockWhatsAppNotifier(db, config),
+  };
 }
