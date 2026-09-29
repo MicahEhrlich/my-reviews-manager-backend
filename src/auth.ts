@@ -17,7 +17,7 @@ export function registerAuth(app: FastifyInstance, config: Config, db: PrismaCli
   app.decorateRequest('csrfToken', '');
   app.addHook('preHandler', async (request, reply) => {
     const routeUrl = request.routeOptions.url ?? request.url;
-    if (publicPaths.has(routeUrl) || routeUrl.startsWith('/docs/')) return;
+    if (publicPaths.has(routeUrl) || routeUrl.startsWith('/docs/') || routeUrl === '/api/v1/post-images/:key') return;
     let user;
     if (config.AUTH_MODE === 'dev') {
       if (config.NODE_ENV === 'production') throw new AppError(500, 'INVALID_AUTH_MODE', 'מצב פיתוח אינו זמין בסביבת ייצור');

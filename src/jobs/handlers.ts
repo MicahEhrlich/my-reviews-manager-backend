@@ -53,19 +53,41 @@ export function createHandlers(db: PrismaClient, providers: Providers, queues: Q
       await providers.whatsapp.send({ locationId: review.location.id, reviewId: review.id, destination: review.location.whatsappAlertNumber, locationName: review.location.displayName, reviewerName: review.reviewerName, rating: review.starRating, dashboardUrl: `${config.FRONTEND_URL}/reviews?review=${review.id}` });
     },
     async scanPosts() {
-      const due = await db.localPost.findMany({ where: { isRecurring: true, status: { in: ['ACTIVE', 'SCHEDULED'] }, nextPublishAt: { lte: new Date() } } });
-      for (const post of due) await queues.postPublish.add('publish-post', { postId: post.id }, { jobId: `post-${post.id}-${post.nextPublishAt?.getTime() ?? 0}` });
+      const stale = new Date(Date.now() - 15 * 60_000);
+      await db.postPublication.updateMany({ where: { status: { in: ['GENERATING', 'PUBLISHING'] }, updatedAt: { lt: stale } }, data: { status: 'QUEUED', failureCode: 'STALE_CLAIM', failureMessage: 'Recovered an interrupted publication' } });
+      const due = await db.postPublication.findMany({ where: { status: 'QUEUED', scheduledAt: { lte: new Date() }, localPost: { status: { in: ['ACTIVE', 'SCHEDULED'] } } } });
+      for (const publication of due) await queues.postPublish.add('publish-post', { publicationId: publication.id }, { jobId: `publication-${publication.id}` });
     },
-    async publishPost(postId: string) {
-      const publicationKey = `claim-${postId}-${Date.now()}`;
-      const claimed = await db.localPost.updateMany({ where: { id: postId, status: { in: ['SCHEDULED', 'ACTIVE', 'FAILED'] }, OR: [{ publicationKey: null }, { publicationKey }] }, data: { status: 'PUBLISHING', publicationKey } });
+    async publishPost(publicationId: string) {
+      const snapshot = await db.postPublication.findUniqueOrThrow({ where: { id: publicationId }, include: { localPost: true } });
+      if (snapshot.localPost.status === 'PAUSED' || snapshot.status === 'PUBLISHED') return;
+      const target = snapshot.generatedText ? 'PUBLISHING' : 'GENERATING';
+      const claimed = await db.postPublication.updateMany({ where: { id: publicationId, status: { in: ['QUEUED', 'FAILED'] } }, data: { status: target, generationStartedAt: snapshot.generatedText ? undefined : new Date(), failureCode: null, failureMessage: null } });
       if (!claimed.count) return;
-      const post = await db.localPost.findUniqueOrThrow({ where: { id: postId }, include: { location: { include: { account: true } } } });
+      let publication = await db.postPublication.findUniqueOrThrow({ where: { id: publicationId }, include: { localPost: { include: { location: { include: { account: true } } } } } });
+      const post = publication.localPost;
       try {
-        const result = await providers.google.createPost(post.location.account, post.location, post);
-        const now = new Date(); const next = post.isRecurring ? nextFutureOccurrence(post.nextPublishAt ?? now, post.frequencyDays, now) : null;
-        await db.localPost.update({ where: { id: post.id }, data: { googlePostId: result.googlePostId, lastPublishedAt: now, nextPublishAt: next, status: 'ACTIVE', publicationKey: null, failureCode: null, failureMessage: null } });
-      } catch (error) { await db.localPost.update({ where: { id: post.id }, data: { status: 'FAILED', publicationKey: null, failureCode: error instanceof Error && 'code' in error ? String(error.code) : 'PUBLISH_FAILED', failureMessage: String(error) } }); throw error; }
+        let generatedText = publication.generatedText;
+        if (!generatedText) {
+          generatedText = post.brief || post.imageUrl
+            ? await providers.postCopy.generate({ businessName: post.location.displayName, businessCategory: post.location.businessCategory, imageUrl: post.imageUrl, brief: post.brief })
+            : post.summaryText;
+          publication = await db.postPublication.update({ where: { id: publication.id }, data: { generatedText, status: 'PUBLISHING' }, include: { localPost: { include: { location: { include: { account: true } } } } } });
+          await db.localPost.update({ where: { id: post.id }, data: { summaryText: generatedText } });
+        }
+        const result = await providers.google.createPost(post.location.account, post.location, { id: publication.id, topicType: post.topicType, summaryText: generatedText, structuredPayload: post.structuredPayload, imageUrl: post.imageUrl });
+        const now = new Date(); const next = post.isRecurring ? nextFutureOccurrence(publication.scheduledAt, post.frequencyDays, now) : null;
+        const nextPublication = await db.$transaction(async (tx) => {
+          await tx.postPublication.update({ where: { id: publication.id }, data: { googlePostId: result.googlePostId, publishedAt: now, status: 'PUBLISHED', failureCode: null, failureMessage: null } });
+          await tx.localPost.update({ where: { id: post.id }, data: { googlePostId: result.googlePostId, summaryText: generatedText, lastPublishedAt: now, nextPublishAt: next, status: 'ACTIVE', publicationKey: null, failureCode: null, failureMessage: null } });
+          return next ? tx.postPublication.upsert({ where: { localPostId_scheduledAt: { localPostId: post.id, scheduledAt: next } }, create: { localPostId: post.id, scheduledAt: next }, update: {} }) : null;
+        });
+        if (nextPublication && next) await queues.postPublish.add('publish-post', { publicationId: nextPublication.id }, { jobId: `publication-${nextPublication.id}`, delay: Math.max(0, next.getTime() - Date.now()) });
+      } catch (error) {
+        const code = error instanceof Error && 'code' in error ? String(error.code) : 'PUBLISH_FAILED';
+        await db.$transaction([db.postPublication.update({ where: { id: publication.id }, data: { status: 'FAILED', failureCode: code, failureMessage: String(error) } }), db.localPost.update({ where: { id: post.id }, data: { status: 'FAILED', failureCode: code, failureMessage: String(error) } })]);
+        throw error;
+      }
     },
   };
 }

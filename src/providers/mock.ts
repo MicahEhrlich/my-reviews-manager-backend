@@ -1,7 +1,7 @@
 import type { PrismaClient, Tone } from '@prisma/client';
 import { ProviderError } from '../lib/errors.js';
 import type { Config } from '../config.js';
-import type { GoogleBusinessProvider, NotificationInput, ReplyInput, ReviewReplyGenerator, WhatsAppNotifier } from './types.js';
+import type { GoogleBusinessProvider, NotificationInput, PostCopyGenerator, ReplyInput, ReviewReplyGenerator, WhatsAppNotifier } from './types.js';
 
 function maybeFail(mode: Config['MOCK_FAILURE_MODE']) {
   if (mode === 'transient') throw new ProviderError('Simulated transient provider failure', true, 'MOCK_TRANSIENT');
@@ -23,8 +23,16 @@ export class MockGoogleProvider implements GoogleBusinessProvider {
   async createPost(_account: Parameters<GoogleBusinessProvider['createPost']>[0], _location: Parameters<GoogleBusinessProvider['createPost']>[1], post: Parameters<GoogleBusinessProvider['createPost']>[2]) {
     maybeFail(this.config.MOCK_FAILURE_MODE);
     const googlePostId = `mock-post-${post.id}-${Date.now()}`;
-    await this.db.providerEvent.create({ data: { provider: 'mock-google', action: 'post.create', resourceId: googlePostId, payload: { text: post.summaryText } } });
+    await this.db.providerEvent.create({ data: { provider: 'mock-google', action: 'post.create', resourceId: googlePostId, payload: { text: post.summaryText, imageUrl: post.imageUrl ?? null } } });
     return { googlePostId };
+  }
+}
+
+export class MockPostCopyGenerator implements PostCopyGenerator {
+  constructor(private config: Config) {}
+  async generate(input: Parameters<PostCopyGenerator['generate']>[0]) {
+    maybeFail(this.config.MOCK_FAILURE_MODE);
+    return input.brief ? `חדש אצל ${input.businessName}: ${input.brief}` : `רגע חדש ומיוחד אצל ${input.businessName} — מוזמנים לבקר אותנו.`;
   }
 }
 

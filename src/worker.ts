@@ -12,7 +12,7 @@ async function run<T>(operation: () => Promise<T>) { try { return await operatio
 const workers = [
   new Worker('maintenance', async (job) => run(() => job.data.task === 'sync-reviews' ? handlers.syncReviews() : handlers.scanPosts()), { connection: redis, concurrency: 1 }),
   new Worker('review-ai', async (job) => run(() => handlers.processReview(job.data.reviewId, job.name === 'approve-review')), { connection: redis, concurrency: 4 }),
-  new Worker('post-publish', async (job) => run(() => handlers.publishPost(job.data.postId)), { connection: redis, concurrency: 2 }),
+  new Worker('post-publish', async (job) => run(() => handlers.publishPost(job.data.publicationId)), { connection: redis, concurrency: 2 }),
   new Worker('notifications', async (job) => run(() => handlers.notify(job.data.reviewId)), { connection: redis, concurrency: 3 }),
 ];
 for (const worker of workers) worker.on('failed', (job, error) => console.error({ queue: worker.name, jobId: job?.id, error }, 'Job failed'));

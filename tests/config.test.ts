@@ -17,5 +17,6 @@ describe('configuration', () => {
   it('keeps Anthropic as the default reply provider for existing live configurations', () => {
     const config = loadConfig({ ...base, PROVIDER_MODE: 'live', REPLY_PROVIDER_MODE: '', GOOGLE_CLIENT_ID: 'client', GOOGLE_CLIENT_SECRET: 'secret', META_WHATSAPP_ACCESS_TOKEN: 'token', META_WHATSAPP_PHONE_NUMBER_ID: 'phone', ANTHROPIC_API_KEY: 'anthropic' });
     expect(config.REPLY_PROVIDER_MODE).toBe('anthropic');
+    expect(config.STORAGE_MODE).toBe('local');
   });
 });

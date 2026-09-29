@@ -2,7 +2,7 @@ import { Queue } from 'bullmq';
 import type { Redis } from 'ioredis';
 
 export interface ReviewJob { reviewId: string }
-export interface PostJob { postId: string }
+export interface PostJob { publicationId: string }
 export interface NotificationJob { reviewId: string }
 export interface MaintenanceJob { task: 'sync-reviews' | 'scan-posts' }
 
@@ -19,5 +19,5 @@ export type Queues = ReturnType<typeof createQueues>;
 
 export async function registerSchedulers(queues: Queues) {
   await queues.maintenance.upsertJobScheduler('review-sync-5m', { every: 5 * 60_000 }, { name: 'review-sync', data: { task: 'sync-reviews' }, opts: { attempts: 3 } });
-  await queues.maintenance.upsertJobScheduler('post-renewal-0300', { pattern: '0 3 * * *' }, { name: 'post-renewal', data: { task: 'scan-posts' }, opts: { attempts: 3 } });
+  await queues.maintenance.upsertJobScheduler('post-recovery-1m', { every: 60_000 }, { name: 'post-recovery', data: { task: 'scan-posts' }, opts: { attempts: 3 } });
 }

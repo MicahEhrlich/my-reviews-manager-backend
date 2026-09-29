@@ -59,7 +59,7 @@ The command requires `PROVIDER_MODE=mock`, `REPLY_PROVIDER_MODE=anthropic`, and 
 
 - `src/api.ts` starts Fastify; `src/app.ts` owns middleware and route registration.
 - `src/worker.ts` starts the `maintenance`, `review-ai`, `post-publish`, and `notifications` workers and registers stable BullMQ Job Schedulers.
-- `src/jobs/handlers.ts` implements idempotent review synchronization, review processing/approval, notifications, and recurring post publication.
+- `src/jobs/handlers.ts` implements review synchronization, review processing/approval, notifications, and occurrence-based AI post generation/publication.
 - `src/providers` contains interfaces plus mock and live implementations. The application selects them only through `createProviders`.
 - `prisma/schema.prisma` is the source model; the SQL migration also adds database check constraints Prisma cannot express directly.
 - Google access and refresh tokens are AES-256-GCM encrypted with a versioned key ring. Sessions and OAuth state are stored in Redis.
@@ -80,14 +80,15 @@ Dashboard:
 - `PUT /api/v1/reviews/:id/draft`
 - `POST /api/v1/reviews/:id/approve`
 - `DELETE /api/v1/reviews/:id`
-- `POST /api/v1/posts`, `PATCH /api/v1/posts/:id/status`
+- `POST /api/v1/posts` (required brief, optional schedule/recurrence)
+- `PATCH /api/v1/posts/:id/status`, `POST /api/v1/posts/:id/retry`
 - `PATCH /api/v1/locations/:id/settings`
 
 Review and post lists support `locationId`, `cursor`, and `limit`; reviews also support `status`, `rating`, and `q`. API errors use `{ "error": { "code", "message", "requestId" } }`.
 
 ## Live adapters (opt-in)
 
-`PROVIDER_MODE` controls the Google Business and WhatsApp adapters. `REPLY_PROVIDER_MODE` independently controls reply generation, so local development can keep Google and WhatsApp mocked while calling Anthropic:
+`PROVIDER_MODE` controls the Google Business and WhatsApp adapters. `REPLY_PROVIDER_MODE` independently controls review-reply generation, so local development can keep Google and WhatsApp mocked while calling Anthropic. AI post copy always uses Anthropic in live provider mode and follows `REPLY_PROVIDER_MODE` in offline development:
 
 ```dotenv
 PROVIDER_MODE=mock
@@ -100,6 +101,23 @@ Restart the worker after changing these values because all Anthropic requests ru
 Set `PROVIDER_MODE=live` only after configuring Google OAuth and Meta values from `.env.example`. When `REPLY_PROVIDER_MODE` is omitted, it defaults to `anthropic` for live integrations and `mock` otherwise, preserving the existing live behavior. Startup fails fast if credentials required by either selected mode are absent. `AUTH_MODE=google` independently enables staff OIDC. Development auth is refused when `NODE_ENV=production`.
 
 Google Business uses the `business.manage` scope and refreshes access tokens through `google-auth-library`. Anthropic defaults to `claude-sonnet-4-6`, constructs a Hebrew-only prompt without the reviewer name, limits untrusted review input, and rejects empty output. Reviews below four stars are stored as drafts for explicit approval and are never automatically published. Meta sends the configured approved template and validates E.164 destinations.
+
+AI posts are standard, text-only Google posts. The API requires a 10–1,000 character brief; the worker combines it with the business name and category, asks Anthropic for Hebrew copy, persists the result, and publishes it to Google. Recurring campaigns support 3, 5, 7, or 14 day intervals and generate fresh copy for each occurrence; retries of a failed Google call reuse that occurrence's saved copy.
+
+Image upload is temporarily disabled, so live Google publishing does not require image storage. The nullable image fields and storage adapters remain available for reactivation later. Local storage is the default; optional S3-compatible configuration is:
+
+```dotenv
+API_PUBLIC_URL=http://localhost:3001
+STORAGE_MODE=s3
+S3_ENDPOINT=https://your-s3-compatible-endpoint.example
+S3_REGION=auto
+S3_BUCKET=revu-post-images
+S3_ACCESS_KEY_ID=server-only-key
+S3_SECRET_ACCESS_KEY=server-only-secret
+S3_PUBLIC_BASE_URL=https://images.example.com
+```
+
+The bucket or CDN behind `S3_PUBLIC_BASE_URL` must allow unauthenticated reads for the generated `posts/<uuid>.jpg` URLs. Credentials remain backend-only.
 
 The frontend consumes these DTOs through its HTTP service without coupling UI components to Prisma, BullMQ, or Anthropic.
 

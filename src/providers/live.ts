@@ -4,11 +4,18 @@ import type { Account, PrismaClient } from '@prisma/client';
 import type { Config } from '../config.js';
 import { decryptToken, encryptToken, parseKeyRing } from '../lib/encryption.js';
 import { ProviderError } from '../lib/errors.js';
-import { buildHebrewReplyPrompt } from './prompt.js';
-import type { ExternalReview, GoogleBusinessProvider, NotificationInput, ReplyInput, ReviewReplyGenerator, WhatsAppNotifier } from './types.js';
+import { buildHebrewPostPrompt, buildHebrewReplyPrompt } from './prompt.js';
+import type { ExternalReview, GoogleBusinessProvider, NotificationInput, PostCopyGenerator, PostCopyInput, ReplyInput, ReviewReplyGenerator, WhatsAppNotifier } from './types.js';
 
 const GOOGLE_ROOT = 'https://mybusiness.googleapis.com/v4';
 function ratingValue(value: string): number { return ({ ONE: 1, TWO: 2, THREE: 3, FOUR: 4, FIVE: 5 } as Record<string, number>)[value] ?? 1; }
+export function buildGooglePostPayload(post: Parameters<GoogleBusinessProvider['createPost']>[2]) {
+  return { languageCode: 'he', summary: post.summaryText, topicType: post.topicType, ...(post.structuredPayload && typeof post.structuredPayload === 'object' ? post.structuredPayload : {}), ...(post.imageUrl ? { media: [{ mediaFormat: 'PHOTO', sourceUrl: post.imageUrl }] } : {}) };
+}
+export function buildAnthropicPostContent(input: PostCopyInput): string | Anthropic.Messages.ContentBlockParam[] {
+  const prompt = buildHebrewPostPrompt(input);
+  return input.imageUrl ? [{ type: 'image', source: { type: 'url', url: input.imageUrl } }, { type: 'text', text: prompt }] : prompt;
+}
 
 export class LiveGoogleProvider implements GoogleBusinessProvider {
   private ring;
@@ -44,8 +51,24 @@ export class LiveGoogleProvider implements GoogleBusinessProvider {
     return {};
   }
   async createPost(account: Account, location: Parameters<GoogleBusinessProvider['createPost']>[1], post: Parameters<GoogleBusinessProvider['createPost']>[2]) {
-    const result = await this.request<{ name: string }>(account, `${GOOGLE_ROOT}/accounts/${account.googleAccountId}/locations/${location.googleLocationId}/localPosts`, { method: 'POST', body: JSON.stringify({ languageCode: 'he', summary: post.summaryText, topicType: post.topicType, ...(post.structuredPayload && typeof post.structuredPayload === 'object' ? post.structuredPayload : {}) }) });
+    const result = await this.request<{ name: string }>(account, `${GOOGLE_ROOT}/accounts/${account.googleAccountId}/locations/${location.googleLocationId}/localPosts`, { method: 'POST', body: JSON.stringify(buildGooglePostPayload(post)) });
     return { googlePostId: result.name };
+  }
+}
+
+export class AnthropicPostCopyGenerator implements PostCopyGenerator {
+  private client; constructor(private config: Config) { this.client = new Anthropic({ apiKey: config.ANTHROPIC_API_KEY }); }
+  async generate(input: PostCopyInput) {
+    const response = await this.client.messages.create({
+      model: this.config.ANTHROPIC_MODEL,
+      max_tokens: 700,
+      temperature: 0.5,
+      messages: [{ role: 'user', content: buildAnthropicPostContent(input) }],
+    });
+    const text = response.content.filter((part) => part.type === 'text').map((part) => part.text).join(' ').trim();
+    if (!text) throw new ProviderError('Anthropic returned empty post copy', true, 'EMPTY_AI_POST');
+    if (text.length > 1_500) throw new ProviderError('Anthropic post copy exceeded 1500 characters', true, 'AI_POST_TOO_LONG');
+    return text;
   }
 }
 

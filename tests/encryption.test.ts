@@ -7,6 +7,7 @@ describe('token encryption', () => {
     const encrypted = encryptToken('refresh-secret', ring);
     expect(encrypted.startsWith('v2.')).toBe(true);
     expect(decryptToken(encrypted, ring)).toBe('refresh-secret');
-    expect(() => decryptToken(`${encrypted.slice(0, -1)}x`, ring)).toThrow();
+    const replacement = encrypted.endsWith('A') ? 'B' : 'A';
+    expect(() => decryptToken(`${encrypted.slice(0, -1)}${replacement}`, ring)).toThrow();
   });
 });

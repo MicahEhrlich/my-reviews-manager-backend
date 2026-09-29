@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { PrismaClient } from '@prisma/client';
 import { loadConfig } from '../src/config.js';
 import { createProviders } from '../src/providers/factory.js';
-import { AnthropicReplyGenerator } from '../src/providers/live.js';
+import { AnthropicPostCopyGenerator, AnthropicReplyGenerator } from '../src/providers/live.js';
 import { MockGoogleProvider, MockWhatsAppNotifier } from '../src/providers/mock.js';
 
 describe('provider factory', () => {
@@ -11,6 +11,7 @@ describe('provider factory', () => {
     const providers = createProviders(config, {} as PrismaClient);
     expect(providers.google).toBeInstanceOf(MockGoogleProvider);
     expect(providers.replies).toBeInstanceOf(AnthropicReplyGenerator);
+    expect(providers.postCopy).toBeInstanceOf(AnthropicPostCopyGenerator);
     expect(providers.whatsapp).toBeInstanceOf(MockWhatsAppNotifier);
   });
 });

@@ -43,6 +43,14 @@ enum PostStatus {
   FAILED
 }
 
+enum PostPublicationStatus {
+  QUEUED
+  GENERATING
+  PUBLISHING
+  PUBLISHED
+  FAILED
+}
+
 enum AccountStatus {
   CONNECTED
   REAUTH_REQUIRED
@@ -150,6 +158,9 @@ model LocalPost {
   googlePostId      String?       @unique
   topicType         PostTopicType
   summaryText       String
+  imageObjectKey    String?
+  imageUrl          String?
+  brief             String?
   structuredPayload Json?
   isRecurring       Boolean       @default(false)
   frequencyDays     Int           @default(6)
@@ -162,9 +173,30 @@ model LocalPost {
   createdAt         DateTime      @default(now())
   updatedAt         DateTime      @updatedAt
   location          Location      @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  publications      PostPublication[]
 
   @@index([locationId, status])
   @@index([isRecurring, status, nextPublishAt])
+}
+
+model PostPublication {
+  id                String                @id @default(cuid())
+  localPostId       String
+  scheduledAt       DateTime
+  generatedText     String?
+  googlePostId      String?               @unique
+  status            PostPublicationStatus @default(QUEUED)
+  generationStartedAt DateTime?
+  publishedAt       DateTime?
+  failureCode       String?
+  failureMessage    String?
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+  localPost         LocalPost             @relation(fields: [localPostId], references: [id], onDelete: Cascade)
+
+  @@unique([localPostId, scheduledAt])
+  @@index([status, scheduledAt])
+  @@index([localPostId, createdAt])
 }
 
 model NotificationLog {
