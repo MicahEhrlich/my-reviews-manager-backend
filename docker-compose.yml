@@ -7,6 +7,8 @@ x-app-environment: &app-environment
   API_PUBLIC_URL: ${API_PUBLIC_URL:-http://localhost:3001}
   AUTH_MODE: ${AUTH_MODE:-dev}
   PROVIDER_MODE: ${PROVIDER_MODE:-mock}
+  GOOGLE_PROVIDER_MODE: ${GOOGLE_PROVIDER_MODE:-mock}
+  SEED_DEMO_DATA: ${SEED_DEMO_DATA:-true}
   REPLY_PROVIDER_MODE: ${REPLY_PROVIDER_MODE:-}
   DEV_USER_EMAIL: ${DEV_USER_EMAIL:-admin@revu.local}
   COOKIE_SECRET: ${COOKIE_SECRET:-local-cookie-secret-change-me-32-chars}

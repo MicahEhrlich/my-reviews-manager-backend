@@ -1,11 +1,12 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { OAuth2Client } from 'google-auth-library';
-import type { Account, PrismaClient } from '@prisma/client';
+import type { PrismaClient } from '@prisma/client';
 import type { Config } from '../config.js';
+import { requireProviderCapability } from '../capabilities.js';
 import { decryptToken, encryptToken, parseKeyRing } from '../lib/encryption.js';
 import { ProviderError } from '../lib/errors.js';
 import { buildHebrewPostPrompt, buildHebrewReplyPrompt } from './prompt.js';
-import type { ExternalReview, GoogleBusinessProvider, NotificationInput, PostCopyGenerator, PostCopyInput, ReplyInput, ReviewReplyGenerator, WhatsAppNotifier } from './types.js';
+import type { ConnectedAccount, ExternalReview, GoogleBusinessProvider, NotificationInput, PostCopyGenerator, PostCopyInput, ReplyInput, ReviewReplyGenerator, WhatsAppNotifier } from './types.js';
 
 const GOOGLE_ROOT = 'https://mybusiness.googleapis.com/v4';
 function ratingValue(value: string): number { return ({ ONE: 1, TWO: 2, THREE: 3, FOUR: 4, FIVE: 5 } as Record<string, number>)[value] ?? 1; }
@@ -20,23 +21,26 @@ export function buildAnthropicPostContent(input: PostCopyInput): string | Anthro
 export class LiveGoogleProvider implements GoogleBusinessProvider {
   private ring;
   constructor(private db: PrismaClient, private config: Config) { this.ring = parseKeyRing(config.TOKEN_ENCRYPTION_KEYS); }
-  private async client(account: Account) {
+  private async client(account: ConnectedAccount) {
+    const connection = account.googleConnection;
+    if (!connection || connection.status !== 'CONNECTED') throw new ProviderError('Google connection is unavailable', false, 'GOOGLE_REAUTH_REQUIRED');
     const client = new OAuth2Client(this.config.GOOGLE_CLIENT_ID, this.config.GOOGLE_CLIENT_SECRET, this.config.GOOGLE_BUSINESS_REDIRECT_URI);
-    client.setCredentials({ refresh_token: account.encryptedRefreshToken ? decryptToken(account.encryptedRefreshToken, this.ring) : undefined, access_token: account.encryptedAccessToken ? decryptToken(account.encryptedAccessToken, this.ring) : undefined, expiry_date: account.tokenExpiresAt?.getTime() });
-    client.on('tokens', async (tokens) => { await this.db.account.update({ where: { id: account.id }, data: { encryptedAccessToken: tokens.access_token ? encryptToken(tokens.access_token, this.ring) : undefined, encryptedRefreshToken: tokens.refresh_token ? encryptToken(tokens.refresh_token, this.ring) : undefined, tokenExpiresAt: tokens.expiry_date ? new Date(tokens.expiry_date) : undefined } }); });
+    client.setCredentials({ refresh_token: connection.encryptedRefreshToken ? decryptToken(connection.encryptedRefreshToken, this.ring) : undefined, access_token: connection.encryptedAccessToken ? decryptToken(connection.encryptedAccessToken, this.ring) : undefined, expiry_date: connection.tokenExpiresAt?.getTime() });
+    client.on('tokens', async (tokens) => { await this.db.googleConnection.update({ where: { id: connection.id }, data: { encryptedAccessToken: tokens.access_token ? encryptToken(tokens.access_token, this.ring) : undefined, encryptedRefreshToken: tokens.refresh_token ? encryptToken(tokens.refresh_token, this.ring) : undefined, tokenExpiresAt: tokens.expiry_date ? new Date(tokens.expiry_date) : undefined } }); });
     return client;
   }
-  private async request<T>(account: Account, url: string, init?: RequestInit): Promise<T> {
+  private async request<T>(account: ConnectedAccount, url: string, init?: RequestInit): Promise<T> {
     try {
       const client = await this.client(account);
       const headers = await client.getRequestHeaders(url);
       const response = await fetch(url, { ...init, headers: { ...Object.fromEntries(headers), 'content-type': 'application/json', ...init?.headers } });
-      if (response.status === 401 || response.status === 403) await this.db.account.update({ where: { id: account.id }, data: { status: 'REAUTH_REQUIRED' } });
+      if ((response.status === 401 || response.status === 403) && account.googleConnection) await this.db.googleConnection.update({ where: { id: account.googleConnection.id }, data: { status: 'REAUTH_REQUIRED' } });
       if (!response.ok) throw new ProviderError(`Google request failed (${response.status})`, response.status === 429 || response.status >= 500, `GOOGLE_${response.status}`);
       return await response.json() as T;
     } catch (error) { if (error instanceof ProviderError) throw error; throw new ProviderError(String(error), true); }
   }
-  async listReviews(account: Account, location: Parameters<GoogleBusinessProvider['listReviews']>[1]): Promise<ExternalReview[]> {
+  async listReviews(account: ConnectedAccount, location: Parameters<GoogleBusinessProvider['listReviews']>[1]): Promise<ExternalReview[]> {
+    await requireProviderCapability(this.db, account.agencyId, 'READ_REVIEWS');
     const result: ExternalReview[] = []; let token: string | undefined;
     do {
       const suffix = token ? `?pageToken=${encodeURIComponent(token)}` : '';
@@ -46,11 +50,13 @@ export class LiveGoogleProvider implements GoogleBusinessProvider {
     } while (token);
     return result;
   }
-  async replyToReview(account: Account, location: Parameters<GoogleBusinessProvider['replyToReview']>[1], review: Parameters<GoogleBusinessProvider['replyToReview']>[2], reply: string) {
+  async replyToReview(account: ConnectedAccount, location: Parameters<GoogleBusinessProvider['replyToReview']>[1], review: Parameters<GoogleBusinessProvider['replyToReview']>[2], reply: string) {
+    await requireProviderCapability(this.db, account.agencyId, 'REPLY_TO_REVIEWS');
     await this.request(account, `${GOOGLE_ROOT}/accounts/${account.googleAccountId}/locations/${location.googleLocationId}/reviews/${review.googleReviewId}/reply`, { method: 'PUT', body: JSON.stringify({ comment: reply }) });
     return {};
   }
-  async createPost(account: Account, location: Parameters<GoogleBusinessProvider['createPost']>[1], post: Parameters<GoogleBusinessProvider['createPost']>[2]) {
+  async createPost(account: ConnectedAccount, location: Parameters<GoogleBusinessProvider['createPost']>[1], post: Parameters<GoogleBusinessProvider['createPost']>[2]) {
+    await requireProviderCapability(this.db, account.agencyId, 'PUBLISH_POSTS');
     const result = await this.request<{ name: string }>(account, `${GOOGLE_ROOT}/accounts/${account.googleAccountId}/locations/${location.googleLocationId}/localPosts`, { method: 'POST', body: JSON.stringify(buildGooglePostPayload(post)) });
     return { googlePostId: result.name };
   }

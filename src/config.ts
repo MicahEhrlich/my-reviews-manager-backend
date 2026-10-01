@@ -12,6 +12,7 @@ const schema = z.object({
   API_PUBLIC_URL: z.string().url().default('http://localhost:3001'),
   AUTH_MODE: z.enum(['dev', 'google']).default('dev'),
   PROVIDER_MODE: z.enum(['mock', 'live']).default('mock'),
+  GOOGLE_PROVIDER_MODE: z.preprocess((value) => value === '' ? undefined : value, z.enum(['mock', 'live']).optional()),
   REPLY_PROVIDER_MODE: z.preprocess((value) => value === '' ? undefined : value, z.enum(['mock', 'anthropic']).optional()),
   DEV_USER_EMAIL: z.string().email().default('admin@revu.local'),
   COOKIE_SECRET: z.string().min(32).default('local-cookie-secret-change-me-32-chars'),
@@ -39,12 +40,13 @@ const schema = z.object({
 });
 
 type ParsedConfig = z.infer<typeof schema>;
-export type Config = Omit<ParsedConfig, 'REPLY_PROVIDER_MODE'> & { REPLY_PROVIDER_MODE: 'mock' | 'anthropic' };
+export type Config = Omit<ParsedConfig, 'REPLY_PROVIDER_MODE' | 'GOOGLE_PROVIDER_MODE'> & { REPLY_PROVIDER_MODE: 'mock' | 'anthropic'; GOOGLE_PROVIDER_MODE: 'mock' | 'live' };
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const parsed = schema.parse(env);
   const config: Config = {
     ...parsed,
+    GOOGLE_PROVIDER_MODE: parsed.GOOGLE_PROVIDER_MODE ?? parsed.PROVIDER_MODE,
     REPLY_PROVIDER_MODE: parsed.REPLY_PROVIDER_MODE ?? (parsed.PROVIDER_MODE === 'live' ? 'anthropic' : 'mock'),
   };
   if (config.NODE_ENV === 'production' && config.AUTH_MODE === 'dev') {
@@ -53,10 +55,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (config.AUTH_MODE === 'google' && (!config.GOOGLE_CLIENT_ID || !config.GOOGLE_CLIENT_SECRET)) {
     throw new Error('Google OIDC requires GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET');
   }
+  if (config.GOOGLE_PROVIDER_MODE === 'live' && (!config.GOOGLE_CLIENT_ID || !config.GOOGLE_CLIENT_SECRET)) {
+    throw new Error('Live providers require: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET');
+  }
   if (config.PROVIDER_MODE === 'live') {
     const missing = [
-      ['GOOGLE_CLIENT_ID', config.GOOGLE_CLIENT_ID],
-      ['GOOGLE_CLIENT_SECRET', config.GOOGLE_CLIENT_SECRET],
       ['META_WHATSAPP_ACCESS_TOKEN', config.META_WHATSAPP_ACCESS_TOKEN],
       ['META_WHATSAPP_PHONE_NUMBER_ID', config.META_WHATSAPP_PHONE_NUMBER_ID],
       ['ANTHROPIC_API_KEY', config.ANTHROPIC_API_KEY],

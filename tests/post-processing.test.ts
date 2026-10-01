@@ -5,7 +5,7 @@ import { createHandlers } from '../src/jobs/handlers.js';
 import type { Providers } from '../src/providers/types.js';
 import type { Queues } from '../src/queues.js';
 
-const post = { id: 'post', topicType: 'STANDARD' as const, summaryText: '', structuredPayload: null, imageUrl: 'https://images.example/post.jpg' as string | null, brief: 'תפריט חדש' as string | null, isRecurring: false, frequencyDays: 7, status: 'SCHEDULED' as const, location: { displayName: 'נונה', businessCategory: 'מסעדה', account: {} } };
+const post = { id: 'post', topicType: 'STANDARD' as const, summaryText: '', structuredPayload: null, imageUrl: 'https://images.example/post.jpg' as string | null, brief: 'תפריט חדש' as string | null, isRecurring: false, frequencyDays: 7, status: 'SCHEDULED' as const, location: { displayName: 'נונה', businessCategory: 'מסעדה', account: { agencyId: 'agency' } } };
 
 function setup(existingText: string | null = null, postValue = post) {
   const publication = { id: 'publication', scheduledAt: new Date('2026-09-28T10:00:00.000Z'), generatedText: existingText, status: existingText ? 'FAILED' : 'QUEUED', localPost: postValue };
@@ -13,6 +13,7 @@ function setup(existingText: string | null = null, postValue = post) {
   const localPostUpdate = vi.fn().mockResolvedValue(postValue);
   const transactionClient = { postPublication: { update: publicationUpdate, upsert: vi.fn() }, localPost: { update: localPostUpdate } };
   const db = {
+    agency: { findUnique: vi.fn().mockResolvedValue({ capabilities: ['READ_REVIEWS', 'PUBLISH_POSTS'] }) },
     postPublication: { findUniqueOrThrow: vi.fn().mockResolvedValue(publication), updateMany: vi.fn().mockResolvedValue({ count: 1 }), update: publicationUpdate },
     localPost: { update: localPostUpdate },
     $transaction: vi.fn().mockImplementation((work) => typeof work === 'function' ? work(transactionClient) : Promise.all(work)),

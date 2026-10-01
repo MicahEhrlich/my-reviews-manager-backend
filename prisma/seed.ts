@@ -3,16 +3,23 @@ import { PrismaClient } from '@prisma/client';
 const db = new PrismaClient();
 
 const agencyId = 'agency_local_revu';
-await db.agency.upsert({ where: { id: agencyId }, update: { name: 'Revu סוכנות דיגיטל' }, create: { id: agencyId, name: 'Revu סוכנות דיגיטל' } });
+const seedDemoData = process.env.SEED_DEMO_DATA !== 'false' && process.env.GOOGLE_PROVIDER_MODE !== 'live';
+const capabilities = seedDemoData ? ['READ_REVIEWS', 'REPLY_TO_REVIEWS', 'PUBLISH_POSTS', 'AUTO_REPLY'] as const : ['READ_REVIEWS'] as const;
+await db.agency.upsert({ where: { id: agencyId }, update: { name: 'Revu סוכנות דיגיטל', capabilities: [...capabilities] }, create: { id: agencyId, name: 'Revu סוכנות דיגיטל', capabilities: [...capabilities] } });
 await db.user.upsert({ where: { email: 'admin@revu.local' }, update: { agencyId, displayName: 'מנהל מקומי', role: 'ADMIN', isActive: true }, create: { id: 'user_local_admin', agencyId, email: 'admin@revu.local', displayName: 'מנהל מקומי', role: 'ADMIN' } });
 await db.user.upsert({ where: { email: 'member@revu.local' }, update: { agencyId, displayName: 'חברת צוות', role: 'MEMBER', isActive: true }, create: { id: 'user_local_member', agencyId, email: 'member@revu.local', displayName: 'חברת צוות', role: 'MEMBER' } });
-const account = await db.account.upsert({ where: { googleAccountId: 'mock-account-001' }, update: { agencyId, googleEmail: 'business@revu.local', status: 'CONNECTED' }, create: { id: 'account_local_google', agencyId, googleAccountId: 'mock-account-001', googleEmail: 'business@revu.local', status: 'CONNECTED' } });
+if (!seedDemoData) {
+  console.log('Seeded local workspace users without demo Google data.');
+  await db.$disconnect();
+  process.exit(0);
+}
+const account = await db.account.upsert({ where: { agencyId_googleAccountId: { agencyId, googleAccountId: 'mock-account-001' } }, update: { displayName: 'חשבון הדגמה', status: 'CONNECTED', isDemo: true }, create: { id: 'account_local_google', agencyId, googleAccountId: 'mock-account-001', displayName: 'חשבון הדגמה', status: 'CONNECTED', isDemo: true } });
 const locations = [
   { id: 'eli', googleLocationId: 'mock-location-eli', displayName: 'מספרת אלי', businessCategory: 'מספרה', defaultTone: 'WARM_PERSONAL' as const, whatsappAlertNumber: '+972501111111' },
   { id: 'lock', googleLocationId: 'mock-location-lock', displayName: 'מנעולן אקספרס', businessCategory: 'מנעולן', defaultTone: 'PROFESSIONAL' as const, whatsappAlertNumber: '+972502222222' },
   { id: 'nona', googleLocationId: 'mock-location-nona', displayName: 'מסעדת נונה', businessCategory: 'מסעדה', defaultTone: 'SHORT_DIRECT' as const, whatsappAlertNumber: '+972503333333' },
 ];
-for (const location of locations) await db.location.upsert({ where: { googleLocationId: location.googleLocationId }, update: { ...location, accountId: account.id }, create: { ...location, accountId: account.id, autoReplyEnabled: true } });
+for (const location of locations) await db.location.upsert({ where: { accountId_googleLocationId: { accountId: account.id, googleLocationId: location.googleLocationId } }, update: { ...location, googleResourceName: `locations/${location.googleLocationId}`, isSelected: true, isVerified: true, accountId: account.id }, create: { ...location, googleResourceName: `locations/${location.googleLocationId}`, accountId: account.id, autoReplyEnabled: true, isSelected: true, isVerified: true, syncStatus: 'COMPLETE' } });
 
 const reviews = [
   { id: 'review_eli_5', locationId: 'eli', googleReviewId: 'google-review-eli-5', reviewerName: 'נועה לוי', starRating: 5, comment: 'אלי מקצועי, נעים והתספורת יצאה בדיוק כמו שרציתי.', aiDraftReply: 'נועה, תודה רבה! שמחנו שאהבת את התוצאה ונשמח לראותך שוב.', publishedReply: 'נועה, תודה רבה! שמחנו שאהבת את התוצאה ונשמח לראותך שוב.', status: 'AUTO_SENT' as const },
@@ -23,7 +30,7 @@ const reviews = [
   { id: 'review_nona_3', locationId: 'nona', googleReviewId: 'google-review-nona-3', reviewerName: 'אורי בר', starRating: 3, comment: 'האוכל טעים אבל המנות הגיעו לאט.', aiDraftReply: 'אורי, תודה על המשוב. מצטערים על ההמתנה ונבדוק כיצד להשתפר.', status: 'PENDING_APPROVAL' as const },
 ];
 const base = new Date('2026-09-01T10:00:00.000Z');
-for (const [index, review] of reviews.entries()) await db.review.upsert({ where: { googleReviewId: review.googleReviewId }, update: review, create: { ...review, googleCreatedAt: new Date(base.getTime() + index * 86_400_000), googleUpdatedAt: new Date(base.getTime() + index * 86_400_000), processedAt: new Date(base.getTime() + index * 86_400_000) } });
+for (const [index, review] of reviews.entries()) await db.review.upsert({ where: { locationId_googleReviewId: { locationId: review.locationId, googleReviewId: review.googleReviewId } }, update: review, create: { ...review, googleCreatedAt: new Date(base.getTime() + index * 86_400_000), googleUpdatedAt: new Date(base.getTime() + index * 86_400_000), processedAt: new Date(base.getTime() + index * 86_400_000) } });
 await db.localPost.upsert({ where: { id: 'post_eli_active' }, update: {}, create: { id: 'post_eli_active', locationId: 'eli', googlePostId: 'mock-existing-post', topicType: 'STANDARD', summaryText: 'נפתחו תורים חדשים לשבוע הקרוב — מוזמנים לקבוע.', isRecurring: true, frequencyDays: 6, nextPublishAt: new Date('2026-09-25T03:00:00.000Z'), lastPublishedAt: new Date('2026-09-19T03:00:00.000Z'), status: 'ACTIVE' } });
 await db.localPost.upsert({ where: { id: 'post_nona_offer' }, update: {}, create: { id: 'post_nona_offer', locationId: 'nona', topicType: 'OFFER', summaryText: 'ארוחה עסקית חדשה בימים א׳–ה׳.', structuredPayload: { offer: { termsConditions: 'בהזמנה מראש' } }, isRecurring: false, frequencyDays: 6, nextPublishAt: new Date('2026-09-20T09:00:00.000Z'), status: 'SCHEDULED' } });
 await db.postPublication.upsert({ where: { localPostId_scheduledAt: { localPostId: 'post_eli_active', scheduledAt: new Date('2026-09-25T03:00:00.000Z') } }, update: {}, create: { localPostId: 'post_eli_active', scheduledAt: new Date('2026-09-25T03:00:00.000Z'), generatedText: 'נפתחו תורים חדשים לשבוע הקרוב — מוזמנים לקבוע.' } });

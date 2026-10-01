@@ -2,7 +2,7 @@
 
 Independent local backend for the Revu Google Business Profile dashboard. It uses Fastify, Prisma/PostgreSQL, BullMQ/Redis, and provider adapters for Google Business Profile, Anthropic, and Meta WhatsApp.
 
-The default configuration is fully offline: `AUTH_MODE=dev`, `PROVIDER_MODE=mock`, and `REPLY_PROVIDER_MODE=mock`. It does not call Google, Anthropic, or Meta and does not contain deployment configuration.
+The default configuration is fully offline: `AUTH_MODE=dev`, `GOOGLE_PROVIDER_MODE=mock`, `PROVIDER_MODE=mock`, and `REPLY_PROVIDER_MODE=mock`. It does not call Google, Anthropic, or Meta and does not contain deployment configuration.
 
 ## Start locally
 
@@ -86,9 +86,39 @@ Dashboard:
 
 Review and post lists support `locationId`, `cursor`, and `limit`; reviews also support `status`, `rating`, and `q`. API errors use `{ "error": { "code", "message", "requestId" } }`.
 
+## Google Business onboarding (read-only rollout)
+
+Google sign-in and Google Business authorization are separate grants. In `AUTH_MODE=google`, a first-time Google sign-in creates an isolated workspace and makes that user its administrator. The onboarding wizard then authorizes `business.manage`, discovers accessible accounts and locations, lets the client select locations, and starts an initial review sync.
+
+For a local real-business test, use a clean database and configure:
+
+```dotenv
+AUTH_MODE=google
+GOOGLE_PROVIDER_MODE=live
+PROVIDER_MODE=mock
+REPLY_PROVIDER_MODE=mock
+SEED_DEMO_DATA=false
+GOOGLE_CLIENT_ID=your-web-oauth-client-id
+GOOGLE_CLIENT_SECRET=your-web-oauth-secret
+GOOGLE_OIDC_REDIRECT_URI=http://localhost:3001/auth/google/callback
+GOOGLE_BUSINESS_REDIRECT_URI=http://localhost:3001/api/v1/google-business/callback
+```
+
+Add both callback URLs to the Google Cloud OAuth web client. Enable the Business Profile Account Management, Business Information, and Google My Business APIs in the same approved Cloud project. The application requests the only available Business Profile management scope, but new workspaces receive only the internal `READ_REVIEWS` capability. API routes, workers, and the live provider reject replies, automatic replies, and post publication until their corresponding workspace capabilities are enabled.
+
+`SEED_DEMO_DATA=false` keeps the local users/workspace but does not insert mock Google accounts, locations, reviews, or scheduled posts. Use a separate PostgreSQL database or Docker volume for live testing rather than reusing a demo database.
+
 ## Live adapters (opt-in)
 
-`PROVIDER_MODE` controls the Google Business and WhatsApp adapters. `REPLY_PROVIDER_MODE` independently controls review-reply generation, so local development can keep Google and WhatsApp mocked while calling Anthropic. AI post copy always uses Anthropic in live provider mode and follows `REPLY_PROVIDER_MODE` in offline development:
+`GOOGLE_PROVIDER_MODE` independently controls Google Business. `PROVIDER_MODE` controls Meta WhatsApp, and `REPLY_PROVIDER_MODE` controls review-reply generation. This allows real Google reads while all write-capable integrations remain mocked:
+
+```dotenv
+GOOGLE_PROVIDER_MODE=live
+PROVIDER_MODE=mock
+REPLY_PROVIDER_MODE=mock
+```
+
+To exercise only real Anthropic draft generation while Google and WhatsApp remain mocked:
 
 ```dotenv
 PROVIDER_MODE=mock
@@ -98,7 +128,7 @@ ANTHROPIC_API_KEY=your-backend-only-key
 
 Restart the worker after changing these values because all Anthropic requests run there. Generated drafts are saved to PostgreSQL before the API returns them to the frontend. The API key must never be placed in a frontend or `VITE_` environment variable.
 
-Set `PROVIDER_MODE=live` only after configuring Google OAuth and Meta values from `.env.example`. When `REPLY_PROVIDER_MODE` is omitted, it defaults to `anthropic` for live integrations and `mock` otherwise, preserving the existing live behavior. Startup fails fast if credentials required by either selected mode are absent. `AUTH_MODE=google` independently enables staff OIDC. Development auth is refused when `NODE_ENV=production`.
+Set `PROVIDER_MODE=live` only after configuring Meta and Anthropic values from `.env.example`. Set `GOOGLE_PROVIDER_MODE=live` only after configuring Google OAuth. When `REPLY_PROVIDER_MODE` is omitted, it defaults to `anthropic` for live Meta integrations and `mock` otherwise. Startup fails fast if credentials required by a selected mode are absent. `AUTH_MODE=google` independently enables client OIDC. Development auth is refused when `NODE_ENV=production`.
 
 Google Business uses the `business.manage` scope and refreshes access tokens through `google-auth-library`. Anthropic defaults to `claude-sonnet-4-6`, constructs a Hebrew-only prompt without the reviewer name, limits untrusted review input, and rejects empty output. Reviews below four stars are stored as drafts for explicit approval and are never automatically published. Meta sends the configured approved template and validates E.164 destinations.
 

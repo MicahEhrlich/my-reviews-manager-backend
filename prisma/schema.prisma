@@ -57,6 +57,29 @@ enum AccountStatus {
   DISCONNECTED
 }
 
+enum GoogleConnectionStatus {
+  DISCOVERING
+  CONNECTED
+  REAUTH_REQUIRED
+  DISCONNECTED
+  ERROR
+}
+
+enum Capability {
+  READ_REVIEWS
+  REPLY_TO_REVIEWS
+  PUBLISH_POSTS
+  AUTO_REPLY
+}
+
+enum LocationSyncStatus {
+  NOT_STARTED
+  PENDING
+  SYNCING
+  COMPLETE
+  FAILED
+}
+
 enum NotificationStatus {
   PENDING
   SENT
@@ -64,12 +87,14 @@ enum NotificationStatus {
 }
 
 model Agency {
-  id        String    @id @default(cuid())
-  name      String
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-  users     User[]
-  accounts  Account[]
+  id                String             @id @default(cuid())
+  name              String
+  capabilities      Capability[]       @default([READ_REVIEWS])
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  users             User[]
+  accounts          Account[]
+  googleConnections GoogleConnection[]
 }
 
 model User {
@@ -88,30 +113,60 @@ model User {
 }
 
 model Account {
-  id                    String        @id @default(cuid())
+  id                 String            @id @default(cuid())
+  agencyId           String
+  googleConnectionId String?
+  googleAccountId    String
+  displayName        String            @default("")
+  isDemo             Boolean           @default(false)
+  status             AccountStatus     @default(CONNECTED)
+  lastReviewSyncAt   DateTime?
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+  agency             Agency            @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  googleConnection   GoogleConnection? @relation(fields: [googleConnectionId], references: [id], onDelete: Cascade)
+  locations          Location[]
+
+  @@index([agencyId, status])
+  @@unique([agencyId, googleAccountId])
+  @@index([status, lastReviewSyncAt])
+  @@index([googleConnectionId])
+}
+
+model GoogleConnection {
+  id                    String                 @id @default(cuid())
   agencyId              String
-  googleAccountId       String        @unique
+  googleSubject         String
   googleEmail           String
   encryptedRefreshToken String?
   encryptedAccessToken  String?
   tokenExpiresAt        DateTime?
-  status                AccountStatus @default(CONNECTED)
-  lastReviewSyncAt      DateTime?
-  createdAt             DateTime      @default(now())
-  updatedAt             DateTime      @updatedAt
-  agency                Agency        @relation(fields: [agencyId], references: [id], onDelete: Cascade)
-  locations             Location[]
+  grantedScopes         String[]               @default([])
+  status                GoogleConnectionStatus @default(DISCOVERING)
+  discoveryCompletedAt  DateTime?
+  lastError             String?
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+  agency                Agency                 @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  accounts              Account[]
 
+  @@unique([agencyId, googleSubject])
   @@index([agencyId, status])
-  @@index([status, lastReviewSyncAt])
 }
 
 model Location {
   id                  String            @id @default(cuid())
   accountId           String
-  googleLocationId    String            @unique
+  googleLocationId    String
+  googleResourceName  String
   displayName         String
   businessCategory    String
+  isSelected          Boolean           @default(false)
+  isVerified          Boolean           @default(false)
+  isActive            Boolean           @default(true)
+  syncStatus          LocationSyncStatus @default(NOT_STARTED)
+  lastReviewSyncAt    DateTime?
+  syncFailureMessage  String?
   defaultTone         Tone              @default(WARM_PERSONAL)
   autoReplyEnabled    Boolean           @default(true)
   whatsappAlertNumber String?
@@ -123,12 +178,14 @@ model Location {
   notifications       NotificationLog[]
 
   @@index([accountId])
+  @@unique([accountId, googleLocationId])
+  @@unique([accountId, googleResourceName])
 }
 
 model Review {
   id                  String            @id @default(cuid())
   locationId          String
-  googleReviewId      String            @unique
+  googleReviewId      String
   reviewerName        String
   starRating          Int
   comment             String
@@ -148,6 +205,7 @@ model Review {
   notifications       NotificationLog[]
 
   @@index([locationId, status])
+  @@unique([locationId, googleReviewId])
   @@index([status, queuedAt])
   @@index([locationId, googleUpdatedAt])
 }

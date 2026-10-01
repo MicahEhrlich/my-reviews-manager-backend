@@ -32,7 +32,7 @@ export async function buildApp(config: Config, db: PrismaClient, redis: Redis, q
     const image = await imageStorage.readLocal(request.params.key);
     return reply.header('content-type', 'image/jpeg').header('cache-control', 'public, max-age=31536000, immutable').send(image);
   });
-  registerGoogleBusinessRoutes(app, config, db, redis);
+  registerGoogleBusinessRoutes(app, config, db, redis, queues);
   registerDashboardRoutes(app, db, queues);
   app.setNotFoundHandler((request, reply) => reply.code(404).send({ error: { code: 'NOT_FOUND', message: 'הנתיב לא נמצא', requestId: request.id } }));
   app.setErrorHandler((error: FastifyError, request, reply) => {

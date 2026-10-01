@@ -1,4 +1,6 @@
-import type { Account, LocalPost, Location, Review, Tone } from '@prisma/client';
+import type { Account, GoogleConnection, LocalPost, Location, Review, Tone } from '@prisma/client';
+
+export type ConnectedAccount = Account & { googleConnection: GoogleConnection | null };
 
 export interface ExternalReview {
   googleReviewId: string;
@@ -9,9 +11,9 @@ export interface ExternalReview {
   updatedAt: Date;
 }
 export interface GoogleBusinessProvider {
-  listReviews(account: Account, location: Location): Promise<ExternalReview[]>;
-  replyToReview(account: Account, location: Location, review: Review, reply: string): Promise<{ googleReplyId?: string }>;
-  createPost(account: Account, location: Location, post: LocalPost | PublishPostInput): Promise<{ googlePostId: string }>;
+  listReviews(account: ConnectedAccount, location: Location): Promise<ExternalReview[]>;
+  replyToReview(account: ConnectedAccount, location: Location, review: Review, reply: string): Promise<{ googleReplyId?: string }>;
+  createPost(account: ConnectedAccount, location: Location, post: LocalPost | PublishPostInput): Promise<{ googlePostId: string }>;
 }
 export interface PublishPostInput { id: string; topicType: LocalPost['topicType']; summaryText: string; structuredPayload: LocalPost['structuredPayload']; imageUrl?: string | null }
 export interface ReplyInput { businessName: string; businessCategory: string; rating: number; reviewText: string; tone: Tone }

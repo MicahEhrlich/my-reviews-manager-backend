@@ -5,23 +5,28 @@ import { AppError } from '../lib/errors.js';
 import { locationDto, postDto, reviewDto } from '../dto.js';
 import { tenantLocation } from '../auth.js';
 import type { Queues } from '../queues.js';
+import { requireCapability } from '../capabilities.js';
 
 const paging = Type.Object({ locationId: Type.Optional(Type.String()), cursor: Type.Optional(Type.String()), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })) });
 const reviewQuery = Type.Intersect([paging, Type.Object({ status: Type.Optional(Type.String()), rating: Type.Optional(Type.Integer({ minimum: 1, maximum: 5 })), q: Type.Optional(Type.String({ maxLength: 200 })) })]);
 
 export function registerDashboardRoutes(app: FastifyInstance, db: PrismaClient, queues: Queues) {
   app.get('/api/v1/locations', async (request) => {
-    const values = await db.location.findMany({ where: { account: { agencyId: request.currentUser.agencyId } }, orderBy: { displayName: 'asc' } });
+    const values = await db.location.findMany({ where: { isSelected: true, isActive: true, account: { agencyId: request.currentUser.agencyId } }, orderBy: { displayName: 'asc' } });
     return { locations: values.map(locationDto) };
   });
   app.get('/api/v1/bootstrap', async (request) => {
-    const locations = await db.location.findMany({ where: { account: { agencyId: request.currentUser.agencyId } }, orderBy: { displayName: 'asc' } });
-    const reviews = await db.review.findMany({ where: { location: { account: { agencyId: request.currentUser.agencyId } }, status: { not: 'DELETED' } }, include: { location: true }, orderBy: { googleCreatedAt: 'desc' }, take: 100 });
-    const posts = await db.localPost.findMany({ where: { location: { account: { agencyId: request.currentUser.agencyId } } }, include: { location: true, publications: { orderBy: { createdAt: 'desc' }, take: 1 } }, orderBy: { createdAt: 'desc' }, take: 100 });
-    return { locations: locations.map(locationDto), reviews: reviews.map(reviewDto), posts: posts.map(postDto) };
+    const [locations, reviews, posts, agency, connection] = await Promise.all([
+      db.location.findMany({ where: { isSelected: true, isActive: true, account: { agencyId: request.currentUser.agencyId } }, orderBy: { displayName: 'asc' } }),
+      db.review.findMany({ where: { location: { isSelected: true, isActive: true, account: { agencyId: request.currentUser.agencyId } }, status: { not: 'DELETED' } }, include: { location: true }, orderBy: { googleCreatedAt: 'desc' }, take: 100 }),
+      db.localPost.findMany({ where: { location: { isSelected: true, isActive: true, account: { agencyId: request.currentUser.agencyId } } }, include: { location: true, publications: { orderBy: { createdAt: 'desc' }, take: 1 } }, orderBy: { createdAt: 'desc' }, take: 100 }),
+      db.agency.findUniqueOrThrow({ where: { id: request.currentUser.agencyId }, select: { capabilities: true } }),
+      db.googleConnection.findFirst({ where: { agencyId: request.currentUser.agencyId, status: { not: 'DISCONNECTED' } }, orderBy: { updatedAt: 'desc' }, select: { status: true, googleEmail: true } }),
+    ]);
+    return { locations: locations.map(locationDto), reviews: reviews.map(reviewDto), posts: posts.map(postDto), capabilities: agency.capabilities, connection };
   });
   app.get<{ Querystring: { locationId?: string } }>('/api/v1/overview/stats', { schema: { querystring: Type.Object({ locationId: Type.Optional(Type.String()) }) } }, async (request) => {
-    const where = { location: { account: { agencyId: request.currentUser.agencyId }, ...(request.query.locationId ? { id: request.query.locationId } : {}) }, status: { not: 'DELETED' as const } };
+    const where = { location: { isSelected: true, isActive: true, account: { agencyId: request.currentUser.agencyId }, ...(request.query.locationId ? { id: request.query.locationId } : {}) }, status: { not: 'DELETED' as const } };
     const [aggregate, pending, responded] = await Promise.all([
       db.review.aggregate({ where, _count: true, _avg: { starRating: true } }),
       db.review.count({ where: { ...where, status: 'PENDING_APPROVAL' } }),
@@ -33,13 +38,13 @@ export function registerDashboardRoutes(app: FastifyInstance, db: PrismaClient, 
     const limit = request.query.limit ?? 25;
     const allowed = new Set<ReviewStatus>(['QUEUED', 'PROCESSING', 'PENDING_APPROVAL', 'APPROVING', 'AUTO_SENT', 'APPROVED', 'FAILED', 'DELETED']);
     const status = request.query.status && allowed.has(request.query.status as ReviewStatus) ? request.query.status as ReviewStatus : undefined;
-    const values = await db.review.findMany({ where: { location: { account: { agencyId: request.currentUser.agencyId }, ...(request.query.locationId ? { id: request.query.locationId } : {}) }, ...(status ? { status } : { status: { not: 'DELETED' } }), ...(request.query.rating ? { starRating: request.query.rating } : {}), ...(request.query.q ? { OR: [{ reviewerName: { contains: request.query.q, mode: 'insensitive' } }, { comment: { contains: request.query.q, mode: 'insensitive' } }] } : {}) }, include: { location: true }, orderBy: [{ googleCreatedAt: 'desc' }, { id: 'desc' }], take: limit + 1, ...(request.query.cursor ? { cursor: { id: request.query.cursor }, skip: 1 } : {}) });
+    const values = await db.review.findMany({ where: { location: { isSelected: true, isActive: true, account: { agencyId: request.currentUser.agencyId }, ...(request.query.locationId ? { id: request.query.locationId } : {}) }, ...(status ? { status } : { status: { not: 'DELETED' } }), ...(request.query.rating ? { starRating: request.query.rating } : {}), ...(request.query.q ? { OR: [{ reviewerName: { contains: request.query.q, mode: 'insensitive' } }, { comment: { contains: request.query.q, mode: 'insensitive' } }] } : {}) }, include: { location: true }, orderBy: [{ googleCreatedAt: 'desc' }, { id: 'desc' }], take: limit + 1, ...(request.query.cursor ? { cursor: { id: request.query.cursor }, skip: 1 } : {}) });
     const hasMore = values.length > limit; const page = values.slice(0, limit);
     return { reviews: page.map(reviewDto), nextCursor: hasMore ? page.at(-1)?.id ?? null : null };
   });
   app.get<{ Querystring: { locationId?: string; cursor?: string; limit?: number } }>('/api/v1/posts', { schema: { querystring: paging } }, async (request) => {
     const limit = request.query.limit ?? 25;
-    const values = await db.localPost.findMany({ where: { location: { account: { agencyId: request.currentUser.agencyId }, ...(request.query.locationId ? { id: request.query.locationId } : {}) } }, include: { location: true, publications: { orderBy: { createdAt: 'desc' }, take: 1 } }, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: limit + 1, ...(request.query.cursor ? { cursor: { id: request.query.cursor }, skip: 1 } : {}) });
+    const values = await db.localPost.findMany({ where: { location: { isSelected: true, isActive: true, account: { agencyId: request.currentUser.agencyId }, ...(request.query.locationId ? { id: request.query.locationId } : {}) } }, include: { location: true, publications: { orderBy: { createdAt: 'desc' }, take: 1 } }, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: limit + 1, ...(request.query.cursor ? { cursor: { id: request.query.cursor }, skip: 1 } : {}) });
     const page = values.slice(0, limit); return { posts: page.map(postDto), nextCursor: values.length > limit ? page.at(-1)?.id ?? null : null };
   });
 
@@ -49,6 +54,7 @@ export function registerDashboardRoutes(app: FastifyInstance, db: PrismaClient, 
     const updated = await db.review.update({ where: { id: review.id }, data: { aiDraftReply: request.body.draft.trim() }, include: { location: true } }); return { review: reviewDto(updated) };
   });
   app.post<{ Params: { id: string } }>('/api/v1/reviews/:id/approve', { schema: { params: Type.Object({ id: Type.String() }) } }, async (request, reply) => {
+    await requireCapability(db, request.currentUser.agencyId, 'REPLY_TO_REVIEWS');
     const review = await ownedReview(db, request.currentUser.agencyId, request.params.id); if (!review) throw new AppError(404, 'REVIEW_NOT_FOUND', 'הביקורת לא נמצאה');
     if (review.status !== 'PENDING_APPROVAL' || !review.aiDraftReply) throw new AppError(409, 'REVIEW_NOT_APPROVABLE', 'אין תשובה הממתינה לאישור');
     await db.review.update({ where: { id: review.id }, data: { status: 'APPROVING' } });
@@ -60,6 +66,7 @@ export function registerDashboardRoutes(app: FastifyInstance, db: PrismaClient, 
     await db.review.update({ where: { id: review.id }, data: { status: 'DELETED' } }); return reply.code(204).send();
   });
   app.post<{ Body: { locationId: string; brief: string; publishAt?: string; isRecurring?: boolean; frequencyDays?: number } }>('/api/v1/posts', { schema: { body: Type.Object({ locationId: Type.String(), brief: Type.String({ minLength: 1, maxLength: 1_000 }), publishAt: Type.Optional(Type.String({ format: 'date-time' })), isRecurring: Type.Optional(Type.Boolean()), frequencyDays: Type.Optional(Type.Integer()) }) } }, async (request, reply) => {
+    await requireCapability(db, request.currentUser.agencyId, 'PUBLISH_POSTS');
     const location = await tenantLocation(db, request, request.body.locationId); if (!location) throw new AppError(404, 'LOCATION_NOT_FOUND', 'המיקום לא נמצא');
     const brief = request.body.brief.trim(); if (brief.length < 10) throw new AppError(400, 'BRIEF_TOO_SHORT', 'הבריף חייב להכיל לפחות 10 תווים');
     const isRecurring = request.body.isRecurring ?? false;
@@ -76,6 +83,7 @@ export function registerDashboardRoutes(app: FastifyInstance, db: PrismaClient, 
     return reply.code(202).send({ post: postDto(post) });
   });
   app.patch<{ Params: { id: string }; Body: { status: 'ACTIVE'|'PAUSED' } }>('/api/v1/posts/:id/status', { schema: { params: Type.Object({ id: Type.String() }), body: Type.Object({ status: Type.Union([Type.Literal('ACTIVE'), Type.Literal('PAUSED')]) }) } }, async (request) => {
+    await requireCapability(db, request.currentUser.agencyId, 'PUBLISH_POSTS');
     const post = await db.localPost.findFirst({ where: { id: request.params.id, location: { account: { agencyId: request.currentUser.agencyId } } } }); if (!post) throw new AppError(404, 'POST_NOT_FOUND', 'הפוסט לא נמצא');
     if (request.body.status === 'PAUSED') {
       const [updated, queued] = await Promise.all([db.localPost.update({ where: { id: post.id }, data: { status: 'PAUSED' }, include: { location: true, publications: { orderBy: { createdAt: 'desc' }, take: 1 } } }), db.postPublication.findMany({ where: { localPostId: post.id, status: 'QUEUED' }, select: { id: true } })]);
@@ -93,6 +101,7 @@ export function registerDashboardRoutes(app: FastifyInstance, db: PrismaClient, 
     return { post: postDto(updated) };
   });
   app.post<{ Params: { id: string } }>('/api/v1/posts/:id/retry', { schema: { params: Type.Object({ id: Type.String() }) } }, async (request, reply) => {
+    await requireCapability(db, request.currentUser.agencyId, 'PUBLISH_POSTS');
     const post = await db.localPost.findFirst({ where: { id: request.params.id, location: { account: { agencyId: request.currentUser.agencyId } } }, include: { location: true, publications: { where: { status: 'FAILED' }, orderBy: { createdAt: 'desc' }, take: 1 } } });
     if (!post) throw new AppError(404, 'POST_NOT_FOUND', 'הפוסט לא נמצא');
     const publication = post.publications[0]; if (!publication) throw new AppError(409, 'POST_NOT_RETRYABLE', 'אין פרסום שניתן לנסות שוב');
@@ -102,6 +111,7 @@ export function registerDashboardRoutes(app: FastifyInstance, db: PrismaClient, 
     return reply.code(202).send({ post: postDto(updated) });
   });
   app.patch<{ Params: { id: string }; Body: { defaultTone?: 'WARM_PERSONAL'|'PROFESSIONAL'|'SHORT_DIRECT'; autoReplyEnabled?: boolean; whatsappAlertNumber?: string|null } }>('/api/v1/locations/:id/settings', { schema: { params: Type.Object({ id: Type.String() }), body: Type.Object({ defaultTone: Type.Optional(Type.Union([Type.Literal('WARM_PERSONAL'), Type.Literal('PROFESSIONAL'), Type.Literal('SHORT_DIRECT')])), autoReplyEnabled: Type.Optional(Type.Boolean()), whatsappAlertNumber: Type.Optional(Type.Union([Type.String({ pattern: '^\\+[1-9]\\d{7,14}$' }), Type.Null()])) }, { minProperties: 1 }) } }, async (request) => {
+    if (request.body.autoReplyEnabled) await requireCapability(db, request.currentUser.agencyId, 'AUTO_REPLY');
     const location = await tenantLocation(db, request, request.params.id); if (!location) throw new AppError(404, 'LOCATION_NOT_FOUND', 'המיקום לא נמצא');
     const updated = await db.location.update({ where: { id: location.id }, data: request.body }); return { location: locationDto(updated) };
   });

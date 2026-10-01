@@ -11,11 +11,11 @@ const location = { id: 'location', displayName: 'עסק', businessCategory: 'מ�
 const apps: Awaited<ReturnType<typeof buildApp>>[] = [];
 afterEach(async () => { await Promise.all(apps.splice(0).map((app) => app.close())); });
 
-async function setup() {
+async function setup(capabilities = ['READ_REVIEWS', 'PUBLISH_POSTS']) {
   const created = { id: 'post', locationId: location.id, topicType: 'STANDARD', summaryText: '', imageObjectKey: null, imageUrl: null, brief: 'ספרו ללקוחות על התפריט החדש', structuredPayload: null, isRecurring: true, frequencyDays: 7, nextPublishAt: new Date(), lastPublishedAt: null, status: 'SCHEDULED', failureCode: null, failureMessage: null, googlePostId: null, publicationKey: null, createdAt: new Date(), updatedAt: new Date(), location };
   const publication = { id: 'publication', localPostId: created.id, scheduledAt: new Date(), generatedText: null, googlePostId: null, status: 'QUEUED', generationStartedAt: null, publishedAt: null, failureCode: null, failureMessage: null, createdAt: new Date(), updatedAt: new Date() };
   const tx = { localPost: { create: vi.fn().mockResolvedValue(created) }, postPublication: { create: vi.fn().mockResolvedValue(publication) } };
-  const db = { user: { findFirst: vi.fn().mockResolvedValue(user) }, location: { findFirst: vi.fn().mockResolvedValue(location) }, $transaction: vi.fn().mockImplementation((work) => work(tx)), $queryRaw: vi.fn() } as unknown as PrismaClient;
+  const db = { user: { findFirst: vi.fn().mockResolvedValue(user) }, agency: { findUniqueOrThrow: vi.fn().mockResolvedValue({ capabilities }), findUnique: vi.fn().mockResolvedValue({ capabilities }) }, googleConnection: { findFirst: vi.fn().mockResolvedValue(null) }, location: { findFirst: vi.fn().mockResolvedValue(location) }, $transaction: vi.fn().mockImplementation((work) => work(tx)), $queryRaw: vi.fn() } as unknown as PrismaClient;
   const redis = { ping: vi.fn(), get: vi.fn(), getdel: vi.fn(), set: vi.fn(), del: vi.fn() } as unknown as Redis;
   const add = vi.fn(); const queues = { postPublish: { getJob: vi.fn().mockResolvedValue(null), add } } as unknown as Queues;
   const storage = { store: vi.fn(), delete: vi.fn() } satisfies ImageStorage;
@@ -26,6 +26,14 @@ async function setup() {
 }
 
 describe('AI post creation API', () => {
+  it('rejects publishing while the workspace is read-only', async () => {
+    const { app, csrf, cookie, add } = await setup(['READ_REVIEWS']);
+    const response = await app.inject({ method: 'POST', url: '/api/v1/posts', headers: { 'x-csrf-token': csrf, ...(cookie ? { cookie } : {}) }, payload: { locationId: location.id, brief: 'ספרו ללקוחות על התפריט החדש' } });
+    expect(response.statusCode).toBe(403);
+    expect(response.json().error.code).toBe('CAPABILITY_NOT_ENABLED');
+    expect(add).not.toHaveBeenCalled();
+  });
+
   it('accepts a required brief and queues a text-only occurrence', async () => {
     const { app, add, storage, csrf, cookie, publication, tx } = await setup();
     const response = await app.inject({ method: 'POST', url: '/api/v1/posts', headers: { 'x-csrf-token': csrf, ...(cookie ? { cookie } : {}) }, payload: { locationId: location.id, brief: 'ספרו ללקוחות על התפריט החדש', isRecurring: true, frequencyDays: 7 } });

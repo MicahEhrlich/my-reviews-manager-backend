@@ -19,14 +19,15 @@ const review = {
     defaultTone: 'PROFESSIONAL',
     autoReplyEnabled: true,
     whatsappAlertNumber: null,
-    account: {},
+    account: { agencyId: 'agency' },
   },
 } as unknown as Review & { location: { id: string; displayName: string; businessCategory: string; defaultTone: 'PROFESSIONAL'; autoReplyEnabled: boolean; whatsappAlertNumber: string | null; account: object } };
 
-function setup(generate: Providers['replies']['generate'], reviewValue = review) {
+function setup(generate: Providers['replies']['generate'], reviewValue = review, capabilities = ['READ_REVIEWS', 'REPLY_TO_REVIEWS', 'AUTO_REPLY']) {
   const update = vi.fn().mockResolvedValue(review);
   const updateMany = vi.fn().mockResolvedValue({ count: 1 });
   const db = {
+    agency: { findUnique: vi.fn().mockResolvedValue({ capabilities }) },
     review: {
       updateMany,
       findUniqueOrThrow: vi.fn().mockResolvedValue(reviewValue),
@@ -65,6 +66,16 @@ describe('review reply processing', () => {
 
     expect(providers.google.replyToReview).toHaveBeenCalledWith(positiveReview.location.account, positiveReview.location, positiveReview, 'תודה על המשוב החיובי.');
     expect(update).toHaveBeenLastCalledWith({ where: { id: positiveReview.id }, data: { aiDraftReply: 'תודה על המשוב החיובי.', publishedReply: 'תודה על המשוב החיובי.', status: 'AUTO_SENT', processedAt: expect.any(Date) } });
+  });
+
+  it('keeps positive reviews as local drafts when the workspace is read-only', async () => {
+    const positiveReview = { ...review, starRating: 5 } as typeof review;
+    const { handlers, providers, update } = setup(vi.fn().mockResolvedValue('טיוטה מקומית בלבד.'), positiveReview, ['READ_REVIEWS']);
+
+    await handlers.processReview(positiveReview.id);
+
+    expect(providers.google.replyToReview).not.toHaveBeenCalled();
+    expect(update).toHaveBeenLastCalledWith({ where: { id: positiveReview.id }, data: { aiDraftReply: 'טיוטה מקומית בלבד.', status: 'PENDING_APPROVAL', processedAt: expect.any(Date) } });
   });
 
   it('persists failure metadata without clearing a previous successful draft', async () => {

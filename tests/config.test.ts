@@ -11,6 +11,12 @@ describe('configuration', () => {
     expect(config.PROVIDER_MODE).toBe('mock');
     expect(config.REPLY_PROVIDER_MODE).toBe('anthropic');
   });
+  it('allows live Google reads while Meta and reply generation stay mocked', () => {
+    const config = loadConfig({ ...base, GOOGLE_PROVIDER_MODE: 'live', GOOGLE_CLIENT_ID: 'client', GOOGLE_CLIENT_SECRET: 'secret' });
+    expect(config.GOOGLE_PROVIDER_MODE).toBe('live');
+    expect(config.PROVIDER_MODE).toBe('mock');
+    expect(config.REPLY_PROVIDER_MODE).toBe('mock');
+  });
   it('requires an API key when Anthropic replies are enabled', () => {
     expect(() => loadConfig({ ...base, REPLY_PROVIDER_MODE: 'anthropic' })).toThrow(/ANTHROPIC_API_KEY/);
   });

@@ -54,14 +54,26 @@ export function registerAuth(app: FastifyInstance, config: Config, db: PrismaCli
     const { tokens } = await client.getToken({ code: request.query.code, codeVerifier });
     const ticket = tokens.id_token ? await client.verifyIdToken({ idToken: tokens.id_token, audience: config.GOOGLE_CLIENT_ID }) : null;
     const payload = ticket?.getPayload();
-    const invited = payload?.sub && payload.email ? await db.user.findFirst({ where: { email: payload.email, isActive: true } }) : null;
-    if (!invited || (invited.googleSubject && invited.googleSubject !== payload?.sub)) throw new AppError(403, 'USER_NOT_ALLOWED', 'המשתמש אינו מורשה בסוכנות');
-    const user = invited.googleSubject ? invited : await db.user.update({ where: { id: invited.id }, data: { googleSubject: payload?.sub } });
+    if (!payload?.sub || !payload.email) throw new AppError(400, 'GOOGLE_IDENTITY_MISSING', 'Google לא החזיר זהות תקינה');
+    const existing = await db.user.findFirst({ where: { OR: [{ googleSubject: payload.sub }, { email: payload.email }], isActive: true } });
+    if (existing?.googleSubject && existing.googleSubject !== payload.sub) throw new AppError(403, 'IDENTITY_CONFLICT', 'כתובת האימייל כבר משויכת לחשבון אחר');
+    const user = existing
+      ? await db.user.update({ where: { id: existing.id }, data: { googleSubject: payload.sub, displayName: payload.name || existing.displayName } })
+      : await db.$transaction(async (tx) => {
+        const agency = await tx.agency.create({ data: { name: payload.name ? `${payload.name} — סביבת עבודה` : 'סביבת העבודה שלי' } });
+        return tx.user.create({ data: { agencyId: agency.id, googleSubject: payload.sub, email: payload.email!, displayName: payload.name || payload.email!, role: 'ADMIN', isActive: true } });
+      });
     const session = randomBytes(32).toString('base64url'); await redis.set(`session:${session}`, user.id, 'EX', 60 * 60 * 12);
     reply.setCookie(SESSION_COOKIE, session, { path: '/', httpOnly: true, signed: true, sameSite: 'lax', secure: config.NODE_ENV === 'production', maxAge: 60 * 60 * 12 });
     return reply.redirect(config.FRONTEND_URL);
   });
-  app.get('/api/v1/session', async (request) => ({ user: { id: request.currentUser.id, email: request.currentUser.email, displayName: request.currentUser.displayName, role: request.currentUser.role }, csrfToken: request.csrfToken }));
+  app.get('/api/v1/session', async (request) => {
+    const [agency, connection] = await Promise.all([
+      db.agency.findUniqueOrThrow({ where: { id: request.currentUser.agencyId }, select: { capabilities: true } }),
+      db.googleConnection.findFirst({ where: { agencyId: request.currentUser.agencyId, status: { not: 'DISCONNECTED' } }, orderBy: { updatedAt: 'desc' }, select: { status: true, googleEmail: true } }),
+    ]);
+    return { user: { id: request.currentUser.id, email: request.currentUser.email, displayName: request.currentUser.displayName, role: request.currentUser.role }, csrfToken: request.csrfToken, capabilities: agency.capabilities, connection };
+  });
   app.post('/api/v1/logout', async (request, reply) => {
     const signed = request.cookies[SESSION_COOKIE]; const unsigned = signed ? request.unsignCookie(signed) : undefined;
     if (unsigned?.valid) await redis.del(`session:${unsigned.value}`);
@@ -70,5 +82,5 @@ export function registerAuth(app: FastifyInstance, config: Config, db: PrismaCli
 }
 
 export function tenantLocation(db: PrismaClient, request: FastifyRequest, locationId: string) {
-  return db.location.findFirst({ where: { id: locationId, account: { agencyId: request.currentUser.agencyId } }, include: { account: true } });
+  return db.location.findFirst({ where: { id: locationId, isSelected: true, isActive: true, account: { agencyId: request.currentUser.agencyId } }, include: { account: true } });
 }
